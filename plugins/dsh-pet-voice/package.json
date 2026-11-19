@@ -1,0 +1,40 @@
+{
+  "name": "dsh-pet-voice",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "对着麦克风说一句话就能指挥 dsh-pet 桌宠：说话内容经 DeepSeek 语音识别转成文字，再解析成动作指令驱动桌宠跳舞、睡觉、吃东西、换位置。",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale",
+    "docs",
+    "icon.svg",
+    "README.md"
+  ],
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.2.0-rc.1"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "license": "MIT"
+}

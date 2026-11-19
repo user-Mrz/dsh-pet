@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+  <rect width="640" height="360" fill="#0f1420"/>
+  <rect x="40" y="196" width="560" height="96" rx="16" fill="#1a2130" stroke="#2b3648" stroke-width="2"/>
+  <rect x="68" y="232" width="300" height="10" rx="5" fill="#2b3648"/>
+  <rect x="68" y="254" width="196" height="10" rx="5" fill="#232c3c"/>
+  <rect x="470" y="222" width="96" height="44" rx="10" fill="#2b3648"/>
+  <rect x="480" y="230" width="34" height="28" rx="6" fill="#3a4761"/>
+
+  <rect x="466" y="118" width="104" height="56" rx="14" fill="#e5484d"/>
+  <rect x="500" y="128" width="10" height="22" rx="5" fill="#fff"/>
+  <path d="M490 148v3a15 15 0 0 0 30 0v-3" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round"/>
+  <line x1="505" y1="164" x2="505" y2="172" stroke="#fff" stroke-width="3.5" stroke-linecap="round"/>
+  <text x="518" y="110" fill="#ff8b8f" font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">松开结束</text>
+
+  <circle cx="176" cy="120" r="46" fill="#4c9bff" opacity="0.16"/>
+  <circle cx="176" cy="120" r="30" fill="#4c9bff" opacity="0.28"/>
+  <circle cx="176" cy="120" r="16" fill="#4c9bff"/>
+  <path d="M150 120a26 26 0 0 1 26-26" fill="none" stroke="#7fc0ff" stroke-width="3" stroke-linecap="round"/>
+
+  <rect x="248" y="86" width="188" height="72" rx="16" fill="#1f2a3c" stroke="#33435c" stroke-width="2"/>
+  <path d="M248 122l-16 10v-22z" fill="#1f2a3c" stroke="#33435c" stroke-width="2"/>
+  <text x="342" y="118" fill="#cfe4ff" font-family="system-ui, sans-serif" font-size="17" text-anchor="middle">跳个舞</text>
+  <text x="342" y="142" fill="#7b8ca6" font-family="system-ui, sans-serif" font-size="12" text-anchor="middle">DeepSeek ASR → 动作</text>
+</svg>

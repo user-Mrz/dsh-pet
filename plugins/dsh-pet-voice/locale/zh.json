@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "语音控制桌宠",
+    "description": "按住对话输入框旁边的话筒说一句话，dsh-pet 桌宠就照着做：说「跳个舞」它就跳舞，说「睡吧」它就睡下，说「到左边」它就走过去，说「扔出去」就被甩飞。语音经 DeepSeek 官方语音识别转成文字，再解析成桌宠动作；识别复用 dsh-pet 内置的 DeepSeek ASR 通道，鉴权走 DSH 凭据里的 DEEPSEEK_API_KEY，本插件不保存也不转发任何密钥。需要先装好并启用 dsh-pet。",
+    "detail": "docs/DETAIL.zh.md"
+  }
+}

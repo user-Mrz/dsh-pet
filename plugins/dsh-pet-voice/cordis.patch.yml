@@ -1,0 +1,19 @@
+# dsh-pet-voice bundle patch.
+#
+# 把「语音控制桌宠」挂进 DSH 配置树。
+#
+# 本插件是 dsh-pet 的配套件，分两半：
+#   宿主半侧（index.js）—— 只声明 bundle 行，不注册路由、不占工具。
+#   浏览器半侧（client.js）—— 在对话输入框工具栏放一个话筒按钮：
+#     录音 → 16kHz 单声道 PCM16 WAV → POST dsh-pet 的 /voice/hear（provider=deepseek）
+#     → 拿到文字 → 解析成动作指令 → POST dsh-pet 的 /anim、/sleep、/wake、/position、
+#     /throw、/broadcast、/bubble/clear 驱动桌宠。
+#
+# 语音识别本身复用 dsh-pet 0.4.9 已内置的 DeepSeek ASR 实现（api.deepseek.com/v1/tools/asr），
+# 鉴权走 DSH 凭据里的 DEEPSEEK_API_KEY；本插件不保存、不转发任何密钥。
+#
+# 本行没有配置项：能调的东西全在说话内容里。
+
+- insert:
+    - id: dsh-pet-voice
+      name: 'dsh-pet-voice'
