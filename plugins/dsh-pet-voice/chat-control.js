@@ -95,10 +95,90 @@ export async function runControl(base, petId, control, fetchJson) {
     return Boolean(r && r.ok === true)
   }
   if (control.kind === 'position') {
-    const r = await fetchJson(base, `/position${q}`, { body: { x: control.x, y: control.y, mode: 'spring' } })
-    return Boolean(r && r.ok === true)
+    const walked = await walkTo(base, petId, control.x, control.y, fetchJson)
+    return walked.ok
   }
   return false
+}
+
+/**
+ * 走过去，而不是瞬移。
+ *
+ * dsh-pet 的 `/position` 支持三种 mode：`instant`（瞬移）、`spring`（弹簧，很快）、
+ * `line`（按 duration 走直线）。默认的 spring 看起来仍像“闪过去”，所以这里用 `line`
+ * 配一段时长，让它真的走过去。
+ *
+ * 光有位移还不够——宠物会在原地「滑行」。所以同时点播走路动画（配置里
+ * `animations.moves.actions` 那几段，如「螃蟹走路」），并按移动方向给 facing。
+ * 两个请求并行发：动画负责「看起来在走」，位移负责「真的过去」。
+ *
+ * @param {string} base - 本机地址 + dsh-pet 路由前缀。
+ * @param {string} petId - 目标宠物。
+ * @param {number} x - 目标 x（0..1）。
+ * @param {number} y - 目标 y（0..1）。
+ * @param {Function} fetchJson - 请求函数。
+ * @returns {Promise<{ok: boolean, message?: string}>} 位移结果。
+ */
+export async function walkTo(base, petId, x, y, fetchJson) {
+  const q = `?pet=${encodeURIComponent(petId)}&surface=any`
+
+  // 先查当前位置，决定朝向与时长：距离越远走越久，但夹在 1.2–3.2 秒之间
+  let fromX = 0.5
+  try {
+    const st = await fetchJson(base, '/state', { method: 'GET' })
+    const leaf = st && st.pets && st.pets[petId] ? st.pets[petId].position : null
+    if (leaf && leaf.data && typeof leaf.data.x === 'number') fromX = leaf.data.x
+  } catch {
+    /* 读不到就按屏幕中间估 */
+  }
+  const facing = x >= fromX ? 'right' : 'left'
+  const distance = Math.abs(x - fromX)
+  // 每 10% 屏宽约 0.35 秒，夹在 1.2–3.2 秒：太短像瞬移，太长像卡住
+  const duration = Math.round(Math.min(3200, Math.max(1200, distance * 3500)))
+
+  // 走路动画：取配置里第一段 moves 动作；没有就只做位移（至少不瞬移）
+  const walkAnim = await pickWalkAnimation(base, fetchJson)
+
+  const tasks = [
+    fetchJson(base, `/position${q}`, { body: { x, y, mode: 'line', duration } }),
+  ]
+  if (walkAnim !== null) {
+    tasks.push(fetchJson(base, `/anim${q}`, { body: { name: walkAnim, facing } }))
+  }
+  const results = await Promise.all(tasks)
+  const moved = results[0]
+  if (moved && moved.ok === true) return { ok: true }
+  return { ok: false, message: moved && typeof moved.message === 'string' ? moved.message : undefined }
+}
+
+/**
+ * 从宠物配置里挑一段走路动画。
+ *
+ * `animations.moves.actions` 是移动专用池（如「螃蟹走路」「原地漂浮踏步」「原地左转奔跑」），
+ * 与随机动作池分开——用它们才像在走，而不是一边走路一边玩魔方。
+ *
+ * @param {string} base - 本机地址 + dsh-pet 路由前缀。
+ * @param {Function} fetchJson - 请求函数。
+ * @returns {Promise<string | null>} 动画名；没有可用的返回 null。
+ */
+async function pickWalkAnimation(base, fetchJson) {
+  try {
+    const cfg = await fetchJson(base, '/config', { method: 'GET' })
+    if (!cfg || typeof cfg !== 'object') return null
+    for (const conf of Object.values(cfg)) {
+      if (!conf || typeof conf !== 'object') continue
+      const moves = conf.animations && conf.animations.moves
+      if (!moves || !Array.isArray(moves.actions)) continue
+      for (const action of moves.actions) {
+        if (action && typeof action === 'object' && typeof action.name === 'string' && action.name !== '') {
+          return action.name
+        }
+      }
+    }
+  } catch {
+    /* 配置读不到就不播动画，位移照做 */
+  }
+  return null
 }
 
 /**

@@ -18,7 +18,7 @@ import { spawn } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { attachChatControl } from './chat-control.js'
+import { attachChatControl, walkTo } from './chat-control.js'
 
 /** dsh-pet 注册在宿主上的路由段；与 dsh-pet 的 shared/constants.ts 同值。 */
 const PET_ROUTE_SEGMENT = '/dsh-pet-7340'
@@ -339,9 +339,10 @@ async function runCommand(base, command, pet) {
     return { ok: false, text: `做不到：${(r && r.message) || '扔不动'}` }
   }
   if (command.kind === 'position') {
-    const r = await petFetch(base, `/position${q}`, { body: { x: command.x, y: command.y, mode: 'spring' } })
-    if (r && r.ok === true) return { ok: true, text: '来啦～' }
-    return { ok: false, text: `做不到：${(r && r.message) || '走不过去'}` }
+    // 走过去，而不是瞬移：播走路动画 + line 模式位移（见 chat-control 的 walkTo）
+    const walked = await walkTo(base, pet.petId, command.x, command.y, petFetch)
+    if (walked.ok) return { ok: true, text: '来啦～' }
+    return { ok: false, text: `做不到：${walked.message || '走不过去'}` }
   }
   return { ok: false, text: '没听懂，再说一次？' }
 }
