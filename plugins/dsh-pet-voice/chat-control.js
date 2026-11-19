@@ -102,15 +102,23 @@ export async function runControl(base, petId, control, fetchJson) {
 }
 
 /**
- * 走过去，而不是瞬移。
+ * 走过去，而不是瞬移；速度对齐 dsh-pet 自己的随机漫游。
  *
- * dsh-pet 的 `/position` 支持三种 mode：`instant`（瞬移）、`spring`（弹簧，很快）、
- * `line`（按 duration 走直线）。默认的 spring 看起来仍像“闪过去”，所以这里用 `line`
- * 配一段时长，让它真的走过去。
+ * dsh-pet 的漫游速度不是「按距离算时长」，而是**由走路动画自身的时长决定**
+ * （见 lib/client.js 的 createWalk）：
  *
- * 光有位移还不够——宠物会在原地「滑行」。所以同时点播走路动画（配置里
- * `animations.moves.actions` 那几段，如「螃蟹走路」），并按移动方向给 facing。
- * 两个请求并行发：动画负责「看起来在走」，位移负责「真的过去」。
+ *   duration     = 走路视频的时长（内置素材兜底 10.09 秒）
+ *   leadSec      = 2s   起步：原地踏步，还没开始位移
+ *   tailSec      = 2s   收尾：已经到位，原地踏步收势
+ *   实际行走窗口 = duration - leadSec - tailSec ≈ 6.09 秒
+ *
+ * 所以位移必须走满「行走窗口」那么久，看起来才和它自己溜达一样。
+ * 按距离算时长（哪怕夹在 1–3 秒）都会明显更快——那是错的。
+ *
+ * 参数从宠物配置的 `animations.moves` 读（default 与所选动作的 params 合并），
+ * 读不到就用 dsh-pet 的内置兜底值。
+ *
+ * 动画与位移并行发：动画负责「看起来在走」，位移负责「真的过去」。
  *
  * @param {string} base - 本机地址 + dsh-pet 路由前缀。
  * @param {string} petId - 目标宠物。
@@ -122,7 +130,7 @@ export async function runControl(base, petId, control, fetchJson) {
 export async function walkTo(base, petId, x, y, fetchJson) {
   const q = `?pet=${encodeURIComponent(petId)}&surface=any`
 
-  // 先查当前位置，决定朝向与时长：距离越远走越久，但夹在 1.2–3.2 秒之间
+  // 先查当前位置，决定朝向
   let fromX = 0.5
   try {
     const st = await fetchJson(base, '/state', { method: 'GET' })
@@ -132,18 +140,16 @@ export async function walkTo(base, petId, x, y, fetchJson) {
     /* 读不到就按屏幕中间估 */
   }
   const facing = x >= fromX ? 'right' : 'left'
-  const distance = Math.abs(x - fromX)
-  // 每 10% 屏宽约 0.35 秒，夹在 1.2–3.2 秒：太短像瞬移，太长像卡住
-  const duration = Math.round(Math.min(3200, Math.max(1200, distance * 3500)))
 
-  // 走路动画：取配置里第一段 moves 动作；没有就只做位移（至少不瞬移）
-  const walkAnim = await pickWalkAnimation(base, fetchJson)
+  // 走路动画与节奏参数都来自配置
+  const walk = await pickWalkAnimation(base, fetchJson)
+  const duration = Math.round(walk.walkMs)
 
   const tasks = [
     fetchJson(base, `/position${q}`, { body: { x, y, mode: 'line', duration } }),
   ]
-  if (walkAnim !== null) {
-    tasks.push(fetchJson(base, `/anim${q}`, { body: { name: walkAnim, facing } }))
+  if (walk.name !== null) {
+    tasks.push(fetchJson(base, `/anim${q}`, { body: { name: walk.name, facing } }))
   }
   const results = await Promise.all(tasks)
   const moved = results[0]
@@ -151,34 +157,54 @@ export async function walkTo(base, petId, x, y, fetchJson) {
   return { ok: false, message: moved && typeof moved.message === 'string' ? moved.message : undefined }
 }
 
+/** dsh-pet 内置走路素材的兜底时长（秒），与 lib/client.js 的 FALLBACK_DURATION_SEC 同值。 */
+const FALLBACK_ANIM_SEC = 10.09
+
+/** dsh-pet 的默认起步 / 收尾时长（秒），与 assets/config.jsonc 的 moves.default 同值。 */
+const FALLBACK_LEAD_SEC = 2
+const FALLBACK_TAIL_SEC = 2
+
 /**
- * 从宠物配置里挑一段走路动画。
+ * 从宠物配置里挑一段走路动画，并算出该走多久。
  *
- * `animations.moves.actions` 是移动专用池（如「螃蟹走路」「原地漂浮踏步」「原地左转奔跑」），
- * 与随机动作池分开——用它们才像在走，而不是一边走路一边玩魔方。
+ * 时长公式照抄 dsh-pet 的 createWalk：实际位移窗口 = 动画时长 - leadSec - tailSec。
+ * 我们拿不到视频的真实时长（素材不在 npm 包里），所以用它的兜底值 10.09 秒，
+ * 或配置里显式写的时长（如果有）。这与它自己漫游时的观感一致。
  *
  * @param {string} base - 本机地址 + dsh-pet 路由前缀。
  * @param {Function} fetchJson - 请求函数。
- * @returns {Promise<string | null>} 动画名；没有可用的返回 null。
+ * @returns {Promise<{name: string | null, walkMs: number}>} 动画名与位移时长（毫秒）。
  */
 async function pickWalkAnimation(base, fetchJson) {
+  let name = null
+  let leadSec = FALLBACK_LEAD_SEC
+  let tailSec = FALLBACK_TAIL_SEC
+  let animSec = FALLBACK_ANIM_SEC
   try {
     const cfg = await fetchJson(base, '/config', { method: 'GET' })
-    if (!cfg || typeof cfg !== 'object') return null
-    for (const conf of Object.values(cfg)) {
-      if (!conf || typeof conf !== 'object') continue
-      const moves = conf.animations && conf.animations.moves
-      if (!moves || !Array.isArray(moves.actions)) continue
-      for (const action of moves.actions) {
-        if (action && typeof action === 'object' && typeof action.name === 'string' && action.name !== '') {
-          return action.name
+    if (cfg && typeof cfg === 'object') {
+      for (const conf of Object.values(cfg)) {
+        if (!conf || typeof conf !== 'object') continue
+        const moves = conf.animations && conf.animations.moves
+        if (!moves || !Array.isArray(moves.actions) || moves.actions.length === 0) continue
+        const first = moves.actions[0]
+        if (first && typeof first === 'object' && typeof first.name === 'string' && first.name !== '') {
+          name = first.name
+          // 动作级 params 覆盖 moves.default（与 dsh-pet 的 Object.assign 同序）
+          const merged = Object.assign({}, moves.default || {}, first.params || {})
+          if (typeof merged.leadSec === 'number' && merged.leadSec >= 0) leadSec = merged.leadSec
+          if (typeof merged.tailSec === 'number' && merged.tailSec >= 0) tailSec = merged.tailSec
+          if (typeof merged.durationSec === 'number' && merged.durationSec > 0) animSec = merged.durationSec
         }
+        break
       }
     }
   } catch {
-    /* 配置读不到就不播动画，位移照做 */
+    /* 配置读不到就用兜底值 */
   }
-  return null
+  // 与 createWalk 同一条公式：位移窗口 = 动画时长 - 起步 - 收尾
+  const windowSec = Math.max(0.1, animSec - leadSec - tailSec)
+  return { name, walkMs: Math.round(windowSec * 1000) }
 }
 
 /**
