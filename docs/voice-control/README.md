@@ -104,10 +104,14 @@ curl -X POST http://127.0.0.1:<dsh端口>/dsh-pet-7340/voice/hear \
 ```
 右键桌宠 →「语音控制」
   → 宿主侧 WASAPI 录音（4ch/48k/float32 → 16kHz 单声道 PCM16 WAV）
-  → POST /dsh-pet-7340/voice/hear（provider=deepseek）
+  → 直接 POST https://api.deepseek.com/v1/tools/asr（DeepSeek 官方语音识别）
+  → 拿回 { request_id, text, duration_ms }
   → 解析成指令
   → POST /anim、/sleep、/wake、/position、/throw 驱动桌宠
 ```
+
+**识别直接打官方接口，不经 dsh-pet 中转。** 鉴权用 DSH 凭据里的 `DEEPSEEK_API_KEY`，
+经 `ctx.credentials` 每次现取、用完即弃，不缓存、不落盘、不进日志。
 
 **录音在宿主侧，不在浏览器。** 宠物活在 dsh-pet 的桌面 Electron 窗口里，那个窗口加载的是
 dsh-pet 自己的页面，配套插件的代码不在里面；而浏览器录音要求页面处于焦点、需要用户手势、

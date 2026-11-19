@@ -4,23 +4,26 @@
  * 在 dsh-pet 的右键菜单里加一项「语音控制」，点了之后：
  *
  *   宿主侧录音（Python + WASAPI，4ch/48k/float32 → 16kHz 单声道 PCM16 WAV）
- *     → POST dsh-pet 的 /voice/hear（provider=deepseek，走 DeepSeek 官方 ASR）
- *     → 把转写文字解析成一条指令
+ *     → 直接 POST https://api.deepseek.com/v1/tools/asr（DeepSeek 官方语音识别）
+ *     → 拿回 { request_id, text, duration_ms }
+ *     → 把 text 解析成一条指令
  *     → POST dsh-pet 的 /anim、/sleep、/wake、/position、/throw、/broadcast 驱动桌宠
  *
  * 全程在宿主进程里完成，不需要浏览器：麦克风、录音、识别、动作一条链。
- *
- * 不保存、不转发任何密钥：ASR 的鉴权在 dsh-pet 里完成（它解析 DSH 凭据里的
- * DEEPSEEK_API_KEY），本插件只把音频交给本机的 dsh-pet 路由。
+ * 识别不经 dsh-pet 中转，直接打官方接口；鉴权用 DSH 凭据里的 DEEPSEEK_API_KEY，
+ * 每次识别现取、用完即弃，不缓存、不落盘、不打日志。
  */
 
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 /** dsh-pet 注册在宿主上的路由段；与 dsh-pet 的 shared/constants.ts 同值。 */
 const PET_ROUTE_SEGMENT = '/dsh-pet-7340'
+
+/** DeepSeek 官方语音识别端点；整段上传、整段返回，不支持流式。 */
+const DEEPSEEK_ASR_ENDPOINT = 'https://api.deepseek.com/v1/tools/asr'
 
 /** 本插件在 dsh-pet 菜单里的 owner 标识。 */
 const MENU_OWNER = 'dsh-pet-voice'
@@ -28,11 +31,30 @@ const MENU_OWNER = 'dsh-pet-voice'
 /** 菜单项文案（dsh-pet 限制 label ≤ 32 字符、禁控制字符）。 */
 const MENU_LABEL = '语音控制'
 
-/** 依赖：webServer 用来拼本机地址。 */
-export const inject = ['webServer']
+/** 依赖：webServer 拼本机地址，credentials 取 DEEPSEEK_API_KEY。 */
+export const inject = ['webServer', 'credentials']
 
 /** 包根目录：用来定位 python/record.py。 */
 const PACKAGE_ROOT = dirname(fileURLToPath(import.meta.url))
+
+/**
+ * 写一行诊断到插件目录下的 voice.log。
+ *
+ * 桌面模式的 DSH 没有控制台，`ctx.logger` 的输出也不容易看到；语音控制涉及
+ * 子进程、网络、凭据三处外部依赖，出问题时需要一个能直接打开看的地方。
+ * 只记时间、级别与消息，**不记音频内容、不记 API Key**。
+ *
+ * @param {'info'|'warn'|'error'} level - 级别。
+ * @param {string} message - 消息正文。
+ */
+function writeDiagnostic(level, message) {
+  try {
+    mkdirSync(PACKAGE_ROOT, { recursive: true })
+    appendFileSync(join(PACKAGE_ROOT, 'voice.log'), `${new Date().toISOString()} [${level}] ${message}\n`)
+  } catch {
+    /* 写不了就算了：诊断不该反过来影响功能 */
+  }
+}
 
 /** 录音时长（秒）。 */
 const RECORD_SECONDS = 8
@@ -232,6 +254,81 @@ async function runCommand(base, command, pet) {
 }
 
 /**
+ * 直接把音频发给 DeepSeek 官方语音识别。
+ *
+ * 对应文档 https://api-docs.deepseek.com/zh-cn/guides/asr：
+ *   POST https://api.deepseek.com/v1/tools/asr
+ *   multipart/form-data，`file` 字段放音频；返回 { request_id, text, duration_ms }。
+ *
+ * 只收 16 位 PCM WAV 或 Ogg Opus；我们的录音器产出的就是 16kHz 单声道 PCM16 WAV。
+ * 鉴权用 DSH 凭据里的 DEEPSEEK_API_KEY——本插件每次现取，不缓存、不落盘、不打日志。
+ *
+ * @param {string} apiKey - DeepSeek API Key。
+ * @param {Uint8Array} audio - WAV 字节。
+ * @param {AbortSignal} [signal] - 超时/取消信号。
+ * @returns {Promise<{ok: true, text: string, durationMs: number} | {ok: false, reason: string, message: string}>}
+ */
+async function transcribeWithDeepSeek(apiKey, audio, signal) {
+  const form = new FormData()
+  // 官方按文件内容判断格式，这里的 MIME 只影响服务端选路
+  form.append('file', new Blob([audio], { type: 'audio/wav' }), 'speech.wav')
+  try {
+    const res = await fetch(DEEPSEEK_ASR_ENDPOINT, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${apiKey}` },
+      body: form,
+      signal: signal ?? AbortSignal.timeout(45_000),
+    })
+    const raw = await res.text()
+    let body = null
+    try {
+      body = JSON.parse(raw)
+    } catch {
+      /* 非 JSON：下面按状态码报 */
+    }
+    if (!res.ok) {
+      // 官方错误体是 { error: { message, type, code } }
+      const detail =
+        body && body.error && typeof body.error.message === 'string' ? body.error.message : raw.slice(0, 200)
+      return { ok: false, reason: `http-${res.status}`, message: detail }
+    }
+    if (!body || typeof body.text !== 'string') {
+      return { ok: false, reason: 'invalid-body', message: '识别响应里没有 text 字段' }
+    }
+    return {
+      ok: true,
+      text: body.text,
+      durationMs: typeof body.duration_ms === 'number' ? body.duration_ms : 0,
+    }
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error)
+    return { ok: false, reason: 'network', message }
+  }
+}
+
+/**
+ * 读 DEEPSEEK_API_KEY。
+ *
+ * 每次识别现取，改配置不必重启；取不到就是没配，不猜、不读别的来源。
+ *
+ * `ctx.credentials.resolve` 收的是一个「凭据引用」——它在运行时就是一个环境变量名
+ * 字符串（`credentialRef()` 只做校验与类型标记）。所以这里直接传裸字符串，
+ * 不 import `@deepseek-ai/dsh-credentials`：那个包只在 DSH 安装目录里，
+ * 工作区里的插件解析不到，import 会让整个模块加载失败。
+ *
+ * @param {any} ctx - 宿主上下文。
+ * @returns {Promise<string | undefined>}
+ */
+async function resolveDeepseekKey(ctx) {
+  try {
+    const resolved = await ctx.credentials.resolve('DEEPSEEK_API_KEY')
+    return resolved && typeof resolved.value === 'string' && resolved.value !== '' ? resolved.value : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * 让桌宠弹一句话（投喂，不生成）。
  *
  * @param {string} base - 本机地址 + 路由前缀。
@@ -354,7 +451,7 @@ function runRecorder(python, script, outPath, seconds, timeoutMs) {
  * @param {string} petId - 触发这次操作的是哪只宠物（菜单点击带回来的）。
  */
 async function handleVoiceCommand(deps, petId) {
-  const { base, python, log } = deps
+  const { base, python, log, ctx } = deps
   const pet = await loadPetInfo(base)
   if (pet === null) {
     log('warn', '读不到 dsh-pet 配置，无法驱动桌宠')
@@ -379,6 +476,7 @@ async function handleVoiceCommand(deps, petId) {
 
     const rec = await runRecorder(python, script, outPath, RECORD_SECONDS, (RECORD_SECONDS + 15) * 1000)
     if (rec.ok !== true) {
+      writeDiagnostic('warn', `录音失败：${rec.reason} ${rec.message ?? ''}`)
       log('warn', `录音失败：${rec.reason} ${rec.message ?? ''}`)
       await sayToPet(base, '麦克风没打开：' + (rec.message || rec.reason || '未知原因').slice(0, 40), target)
       return
@@ -392,27 +490,37 @@ async function handleVoiceCommand(deps, petId) {
       return
     }
 
-    // 识别：把 WAV 以 base64 交给 dsh-pet，它负责调 DeepSeek ASR
-    const audio = readFileSync(outPath).toString('base64')
-    const heard = await petFetch(base, '/voice/hear', {
-      body: { audio, provider: 'deepseek' },
-      timeoutMs: 45_000,
-    })
-    if (!heard || typeof heard !== 'object') {
-      await sayToPet(base, '识别请求失败', target)
+    // 识别：直接把音频发给 DeepSeek 官方 ASR（不经 dsh-pet 中转）
+    const apiKey = await resolveDeepseekKey(ctx)
+    if (apiKey === undefined) {
+      await sayToPet(base, '没配 DEEPSEEK_API_KEY，认不了语音', target)
+      log('warn', '没有 DEEPSEEK_API_KEY，无法识别')
       return
     }
+    const audio = readFileSync(outPath)
+    const heard = await transcribeWithDeepSeek(apiKey, audio)
     if (heard.ok !== true) {
-      const msg = typeof heard.message === 'string' ? heard.message : ''
-      if (heard.reason === 'unsupported') {
-        await sayToPet(base, '宿主没开语音识别（检查 DEEPSEEK_API_KEY）', target)
+      const detail = heard.message || '未知原因'
+      if (heard.reason === 'http-401' || heard.reason === 'http-403') {
+        await sayToPet(base, 'API Key 无效或没权限', target)
+      } else if (heard.reason === 'http-400') {
+        await sayToPet(base, '音频格式不对：' + detail.slice(0, 30), target)
+      } else if (heard.reason === 'http-413') {
+        await sayToPet(base, '录音太大了', target)
+      } else if (heard.reason === 'http-429') {
+        await sayToPet(base, '请求太频繁，等一下再试', target)
+      } else if (heard.reason === 'http-503' || heard.reason === 'http-504') {
+        await sayToPet(base, '识别服务忙，稍后再试', target)
       } else {
-        await sayToPet(base, '识别失败：' + (msg || '未知原因').slice(0, 40), target)
+        await sayToPet(base, '识别失败：' + detail.slice(0, 30), target)
       }
-      log('warn', `识别失败：${heard.reason} ${msg}`)
+      writeDiagnostic('warn', `识别失败：${heard.reason} ${detail}`)
+      log('warn', `识别失败：${heard.reason} ${detail}`)
       return
     }
-    const text = typeof heard.text === 'string' ? heard.text.trim() : ''
+    const text = heard.text.trim()
+    // 识别结果进诊断日志：出问题时能看出是「听错了」还是「没匹配上关键词」
+    writeDiagnostic('info', `识别到「${text}」`)
     if (text === '') {
       await sayToPet(base, '没听清，再说一次', target)
       return
@@ -427,6 +535,7 @@ async function handleVoiceCommand(deps, petId) {
     const result = await runCommand(base, command, target)
     await sayToPet(base, result.text, target)
   } catch (error) {
+    writeDiagnostic('error', error && error.stack ? error.stack : String(error))
     log('warn', `语音控制出错：${error && error.message ? error.message : String(error)}`)
     await sayToPet(base, '出错了，看日志', target).catch(() => {})
   } finally {
@@ -524,7 +633,7 @@ export function apply(ctx, config = {}) {
           continue
         }
         busy = true
-        void handleVoiceCommand({ base, python, log }, petId)
+        void handleVoiceCommand({ base, python, log, ctx }, petId)
           .catch((error) => log('warn', `处理失败：${error && error.message ? error.message : String(error)}`))
           .finally(() => {
             busy = false

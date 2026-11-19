@@ -43,14 +43,21 @@ So the helper has to take WASAPI's native mix format and resample it to the 16 k
 
 ## Which recognition path is used
 
-Recognition uses DeepSeek's official ASR endpoint `POST https://api.deepseek.com/v1/tools/asr`, issued by the implementation **built into dsh-pet**:
+The plugin sends the audio **directly** to DeepSeek's official ASR endpoint:
 
-- Audio: 16 kHz, mono, 16-bit PCM WAV, sent as one complete request and returned as one complete transcript;
-- Authentication: the `DEEPSEEK_API_KEY` in DSH credentials, resolved by dsh-pet;
-- This plugin only POSTs audio to the local dsh-pet route `/dsh-pet-7340/voice/hear` (`provider=deepseek`) and receives text back.
+```
+POST https://api.deepseek.com/v1/tools/asr
+  multipart/form-data, the file field carries 16 kHz mono PCM16 WAV
+→ { "request_id": "...", "text": "dance", "duration_ms": 2990 }
+```
 
-**This plugin never reads, stores, or forwards any API key.**
+- Audio: 16-bit PCM WAV or Ogg Opus, mono or stereo (stereo uses the left channel), up to 120 seconds and 8 MiB;
+- Authentication: the `DEEPSEEK_API_KEY` in DSH credentials, resolved per request through `ctx.credentials`;
+- No dsh-pet relay and no DSH voice-input plugin required.
 
+**The key is never cached, written to disk, or logged**; each recognition resolves it once and discards it.
+
+Errors are reported by status code: 401/403 means an invalid key, 400 a bad audio format, 413 the recording is too large, 429 too many requests, 503/504 the service is busy.
 ## Configuration
 
 | Key | Default | Meaning |
@@ -59,8 +66,8 @@ Recognition uses DeepSeek's official ASR endpoint `POST https://api.deepseek.com
 
 ## Limitations
 
-- Requires **dsh-pet 0.4.9 or newer**: it provides `/voice/hear`, `/menu/item`, and the `deepseek` recognizer.
-- Requires a configured `DEEPSEEK_API_KEY`; without it recognition returns `unsupported` and the pet says speech recognition is unavailable.
+- Requires **dsh-pet 0.4.9 or newer**: it provides `/menu/item` and the `/anim`, `/sleep`, `/position` action endpoints.
+- Requires a configured `DEEPSEEK_API_KEY`; without it the pet reports that no key is configured.
 - Requires **Python 3** on the machine (verified with 3.13).
 - One recording is a fixed 8 seconds (the script accepts 0.5–120 s; change `RECORD_SECONDS`).
 - Recognition is billed by audio duration on your DeepSeek account.

@@ -60,7 +60,7 @@ Python 解释器路径可用环境变量 `DSH_PET_VOICE_PYTHON` 覆盖。不设�
 
 ## 限制
 
-- 需要 **dsh-pet 0.4.9 或更新**：`/voice/hear`、`/menu/item` 与 `deepseek` 识别实现都是它提供的。
+- 需要 **dsh-pet 0.4.9 或更新**：`/menu/item` 与 `/anim`、`/sleep`、`/position` 等动作端点都是它提供的。
 - 需要 `DEEPSEEK_API_KEY` 已配置，否则识别返回 `unsupported`，桌宠提示「宿主没开语音识别」。
 - 需要本机有 **Python 3**（实测 3.13）。
 - 单次录音固定 8 秒（脚本支持 0.5–120 秒，改 `RECORD_SECONDS` 即可）。

@@ -2,12 +2,15 @@
 #
 # 把「语音控制桌宠」挂进 DSH 配置树。
 #
-# 全部逻辑在宿主半侧（index.js）：
+# 链路（全程在宿主进程，不经过浏览器）：
 #   1. 往 dsh-pet 的右键菜单注册一项「语音控制」（owner=dsh-pet-voice, target=desktop）
 #   2. 轮询 /menu/events 等点击
 #   3. 点了就调 python/record.py 录音（WASAPI，4ch/48k/float32 → 16kHz 单声道 PCM16 WAV）
-#   4. 把 WAV 交给 dsh-pet 的 /voice/hear（provider=deepseek，走 DeepSeek 官方 ASR）
-#   5. 把转写文字解析成指令，调 /anim、/sleep、/wake、/position、/throw 驱动桌宠
+#   4. 直接把 WAV 发给 https://api.deepseek.com/v1/tools/asr，拿回 { request_id, text, duration_ms }
+#   5. 把 text 解析成指令，调 /anim、/sleep、/wake、/position、/throw 驱动桌宠
+#
+# 识别不经 dsh-pet 中转，直接打 DeepSeek 官方接口；鉴权用 DSH 凭据里的
+# DEEPSEEK_API_KEY（经 ctx.credentials 现取，用完即弃，不缓存、不落盘、不打日志）。
 #
 # 为什么录音在宿主侧而不是浏览器：
 #   宠物在桌面 Electron 窗口里，那个窗口加载的是 dsh-pet 自己的页面，没有本插件的代码；
@@ -17,9 +20,6 @@
 #   这台机器的麦克风原生格式是 4 声道 / 48000 Hz / 32 位浮点（WAVE_FORMAT_EXTENSIBLE），
 #   Windows 的 waveIn 老接口协商会"成功"但一个采样都录不到。必须走 WASAPI 拿原生格式
 #   再自己重采样，而 Node 没有现成的 Windows 音频库。Python 用 ctypes 调 COM 即可，零第三方依赖。
-#
-# 语音识别本身复用 dsh-pet 已内置的 DeepSeek ASR 实现，鉴权走 DSH 凭据里的
-# DEEPSEEK_API_KEY；本插件不保存、不转发任何密钥。
 #
 # Python 解释器路径可在环境变量 DSH_PET_VOICE_PYTHON 里覆盖；不设则自动探测。
 

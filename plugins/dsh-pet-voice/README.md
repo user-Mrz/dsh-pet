@@ -41,13 +41,31 @@
 
 ## 识别走哪条路
 
-`POST https://api.deepseek.com/v1/tools/asr`，由 dsh-pet 内置的实现发起：
+插件**直接**把音频发给 DeepSeek 官方语音识别接口：
 
-- 音频 16 kHz / 单声道 / 16 位 PCM WAV，整段发送、整段返回；
-- 鉴权用 DSH 凭据里的 `DEEPSEEK_API_KEY`，由 dsh-pet 解析；
-- 本插件只把音频 POST 给本机 `/dsh-pet-7340/voice/hear`（`provider=deepseek`），只收文字。
+```
+POST https://api.deepseek.com/v1/tools/asr
+  multipart/form-data，file 字段放 16kHz 单声道 PCM16 WAV
+→ { "request_id": "...", "text": "跳个舞", "duration_ms": 2990 }
+```
 
-**本插件不读取、不保存、不转发任何 API Key。**
+- 音频格式：16 位 PCM WAV 或 Ogg Opus，单声道或双声道（双声道只识别左声道），最长 120 秒、最大 8 MiB；
+- 鉴权：DSH 凭据里的 `DEEPSEEK_API_KEY`，经 `ctx.credentials` 每次现取；
+- 不经 dsh-pet 中转，也不需要装 DSH 官方语音输入插件。
+
+**密钥不缓存、不落盘、不进日志**，每次识别取一次、用完即弃。
+
+错误按状态码给出可读提示：401/403 说 Key 无效，400 说音频格式不对，413 说录音太大，429 说太频繁，503/504 说服务忙。
+## 排查
+
+插件把关键步骤写进包目录下的 `voice.log`（不记音频内容、不记 API Key）：
+
+- 录音失败：`录音失败：<reason> <message>`
+- 识别失败：`识别失败：<reason> <detail>`
+- 识别成功：`识别到「...」`——看出是听错了还是没匹配上关键词
+- 未捕获异常：完整堆栈
+
+路径：`<插件目录>/voice.log`（装在 profile 里时是 profile 的 `node_modules/dsh-pet-voice/voice.log`）。
 
 ## 配置
 
@@ -58,8 +76,8 @@ Python 解释器路径可用环境变量 `DSH_PET_VOICE_PYTHON` 覆盖。不设�
 
 ## 限制
 
-- 需要 **dsh-pet 0.4.9+**（`/voice/hear`、`/menu/item`、`deepseek` 识别实现由它提供）。
-- 需要已配置 `DEEPSEEK_API_KEY`，否则识别返回 `unsupported`。
+- 需要 **dsh-pet 0.4.9+**（`/menu/item` 与 `/anim` 等动作端点由它提供）。
+- 需要已配置 `DEEPSEEK_API_KEY`，否则桌宠提示「没配 DEEPSEEK_API_KEY，认不了语音」。
 - 需要本机有 **Python 3**（实测 3.13）。
 - 单次录音固定 8 秒；识别按音频时长计费。
 - 录制的是默认录音设备（WASAPI 序号 0）。
