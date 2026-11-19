@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "语音控制桌宠",
-    "description": "在 dsh-pet 桌宠的右键菜单里加一项「语音控制」。点一下，桌宠说「我在听…」并开始录音；说完它就把这句话变成动作：说「跳个舞」就跳舞，说「睡吧」就睡下，说「到左边」就走过去，说「扔出去」就被甩飞。录音在宿主侧用 WASAPI 完成（这台机器的麦克风是 4 声道 / 48kHz / 32 位浮点，老式 waveIn 接口录不到数据，所以走 Python 调 WASAPI 并重采样成 16kHz 单声道 WAV），录音后直接把音频发给 DeepSeek 官方语音识别接口（api.deepseek.com/v1/tools/asr），拿回文字再解析成动作；鉴权用 DSH 凭据里的 DEEPSEEK_API_KEY，每次现取、用完即弃，不缓存也不落盘。需要先装好并启用 dsh-pet，以及本机有 Python 3。",
+    "description": "在 dsh-pet 桌宠的右键菜单里加一项「语音控制」。点一下，桌宠说「我在听…」并开始录音；说完它就把这句话变成动作：说「跳个舞」就跳舞，说「睡吧」就睡下，说「到左边」就走过去，说「扔出去」就被甩飞。录音在宿主侧用 WASAPI 完成（这台机器的麦克风是 4 声道 / 48kHz / 32 位浮点，老式 waveIn 接口录不到数据，所以走 Python 调 WASAPI 并重采样成 16kHz 单声道 WAV），录音后直接把音频发给 DeepSeek 官方语音识别接口（api.deepseek.com/v1/tools/asr），拿回文字再解析成动作；鉴权用 DSH 凭据里的 DEEPSEEK_API_KEY，每次现取、用完即弃，不缓存也不落盘。另外，直接在 dsh-pet 的对话框里打字也能控制它：说「晚安」会睡下，说「你到右边去待着」会走过去——插件借 dsh-pet 的 petApi7340 服务把控制动作接进了对话。需要先装好并启用 dsh-pet，以及本机有 Python 3。",
     "detail": "docs/DETAIL.zh.md"
   }
 }

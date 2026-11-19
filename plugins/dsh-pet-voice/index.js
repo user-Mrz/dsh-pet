@@ -18,6 +18,7 @@ import { spawn } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { attachChatControl } from './chat-control.js'
 
 /** dsh-pet 注册在宿主上的路由段；与 dsh-pet 的 shared/constants.ts 同值。 */
 const PET_ROUTE_SEGMENT = '/dsh-pet-7340'
@@ -31,8 +32,8 @@ const MENU_OWNER = 'dsh-pet-voice'
 /** 菜单项文案（dsh-pet 限制 label ≤ 32 字符、禁控制字符）。 */
 const MENU_LABEL = '语音控制'
 
-/** 依赖：webServer 拼本机地址，credentials 取 DEEPSEEK_API_KEY。 */
-export const inject = ['webServer', 'credentials']
+/** 依赖：webServer 拼本机地址，credentials 取 DEEPSEEK_API_KEY，llm + agentDefaultModel 理解自然语言。 */
+export const inject = ['webServer', 'credentials', 'llm', 'agentDefaultModel']
 
 /** 包根目录：用来定位 python/record.py。 */
 const PACKAGE_ROOT = dirname(fileURLToPath(import.meta.url))
@@ -179,6 +180,98 @@ async function petFetch(base, path, options = {}) {
   } catch {
     return null
   }
+}
+
+/**
+ * 让模型把一句话理解成一条指令。
+ *
+ * 关键词表只能覆盖「恰好说到那几个词」的说法；实测里用户说的常常是
+ * 「有些工具啊，我问一下他用了哪些工具」这种自然句子，关键词一个都不中。
+ * 所以先试关键词（快、免费、确定），没命中再问模型。
+ *
+ * 模型只负责从给定清单里挑一个动作名并给出参数，不能凭空发明动画——
+ * 清单就是该宠物配置里真实存在的那些，挑不到就回 null，由调用方提示「没听懂」。
+ *
+ * @param {any} ctx - 宿主上下文。
+ * @param {string} text - 识别出来的文字。
+ * @param {readonly string[]} animNames - 该宠物可播的全部动画名。
+ * @returns {Promise<{kind: string, anim?: string, x?: number, y?: number} | null>}
+ */
+async function interpretWithModel(ctx, text, animNames) {
+  const llm = ctx.llm
+  if (!llm || typeof llm.stream !== 'function') return null
+  const selection = ctx.agentDefaultModel?.currentSelection?.()
+  if (!selection || !selection.provider || !selection.model) return null
+
+  // 动作清单：模型只能从这里面挑，避免它编出播不出来的名字
+  const actions = animNames.length > 0 ? animNames.join('、') : '（无可用动画）'
+  const system =
+    '你是一个指令解析器。把用户说的话解析成对桌面宠物的一个动作。\n' +
+    '只能输出一行 JSON，不要解释、不要 markdown 代码块。\n' +
+    '可用动作（动画名必须原样取自下列清单）：\n' +
+    actions +
+    '\n\n可用控制动作（不在动画清单里，直接写这些名字）：\n' +
+    'sleep（睡觉）、wake（醒来）、throw（被扔出去）、move-left（去左边）、move-right（去右边）、move-center（回中间）、move-up（去上面）、move-down（去下面）\n\n' +
+    '输出格式：\n' +
+    '{"kind":"anim","anim":"<清单里的动画名>"}  或  {"kind":"control","action":"sleep"}\n' +
+    '如果这句话与宠物动作无关（比如在聊工作、讨论工具、随口说话），输出 {"kind":"none"}。\n' +
+    '判断要保守：拿不准就输出 none，不要硬凑一个动作。'
+
+  let out = ''
+  try {
+    const stream = llm.stream({
+      provider: selection.provider,
+      model: selection.model,
+      messages: [{ role: 'user', content: [{ type: 'text', text }] }],
+      system,
+      temperature: 0,
+      signal: AbortSignal.timeout(20_000),
+    })
+    for await (const chunk of stream) {
+      if (chunk && chunk.type === 'text-delta' && typeof chunk.text === 'string') out += chunk.text
+      if (chunk && chunk.type === 'finish') break
+    }
+  } catch (error) {
+    writeDiagnostic('warn', `模型解析失败：${error && error.message ? error.message : String(error)}`)
+    return null
+  }
+
+  // 从回复里抠出第一个 JSON 对象（模型可能带多余文字或代码块围栏）
+  const match = /\{[\s\S]*?\}/.exec(out)
+  if (!match) {
+    writeDiagnostic('warn', `模型没有给出 JSON：${out.slice(0, 120)}`)
+    return null
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(match[0])
+  } catch {
+    writeDiagnostic('warn', `模型 JSON 解析失败：${match[0].slice(0, 120)}`)
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object') return null
+  if (parsed.kind === 'none') return null
+
+  if (parsed.kind === 'anim') {
+    const anim = typeof parsed.anim === 'string' ? parsed.anim : ''
+    // 必须真实存在于配置里：模型编出来的名字播不了
+    if (anim === '' || (animNames.length > 0 && !animNames.includes(anim))) {
+      writeDiagnostic('warn', `模型给了不存在的动画：${anim}`)
+      return null
+    }
+    return { kind: 'anim', anim }
+  }
+
+  if (parsed.kind === 'control') {
+    const action = typeof parsed.action === 'string' ? parsed.action : ''
+    if (action === 'sleep' || action === 'wake' || action === 'throw') return { kind: action }
+    if (action === 'move-left') return { kind: 'position', x: 0.2, y: 0.65 }
+    if (action === 'move-right') return { kind: 'position', x: 0.8, y: 0.65 }
+    if (action === 'move-center') return { kind: 'position', x: 0.5, y: 0.65 }
+    if (action === 'move-up') return { kind: 'position', x: 0.5, y: 0.25 }
+    if (action === 'move-down') return { kind: 'position', x: 0.5, y: 0.8 }
+  }
+  return null
 }
 
 /**
@@ -527,11 +620,25 @@ async function handleVoiceCommand(deps, petId) {
     }
 
     log('info', `识别到「${text}」`)
-    const command = parseCommand(text, pet.animNames)
+    // 一级：关键词表（快、免费、结果确定）
+    let command = parseCommand(text, pet.animNames)
+    let via = 'keyword'
     if (command.kind === 'none') {
+      // 二级：让模型理解意图。关键词表只能覆盖「恰好说到那几个词」的说法，
+      // 而实测里用户常说的是自然句子，一个关键词都不中。
+      await sayToPet(base, '想一下…', target)
+      const interpreted = await interpretWithModel(ctx, text, pet.animNames)
+      if (interpreted !== null) {
+        command = interpreted
+        via = 'model'
+      }
+    }
+    if (command.kind === 'none') {
+      writeDiagnostic('info', `没听懂（关键词与模型都没命中）：「${text}」`)
       await sayToPet(base, '没听懂「' + text.slice(0, 12) + '」', target)
       return
     }
+    writeDiagnostic('info', `执行指令（${via}）：${JSON.stringify(command)}`)
     const result = await runCommand(base, command, target)
     await sayToPet(base, result.text, target)
   } catch (error) {
@@ -646,12 +753,27 @@ export function apply(ctx, config = {}) {
     () => {
       stopped = false
       void pollLoop()
+      // 对话控制：说「晚安」会睡下、「去右边」会走过去。
+      // 与语音控制互补——语音是按住说话，对话是打字聊天，两条路都能驱动桌宠。
+      const chatLog = (level, message) => {
+        writeDiagnostic(level, message)
+        log(level, message)
+      }
+      const chat = attachChatControl({ ctx, base, fetchJson: petFetch, log: chatLog })
+      const disposeChat = chat && typeof chat === 'object' && typeof chat.dispose === 'function' ? chat.dispose : null
       return () => {
         stopped = true
+        if (disposeChat !== null) {
+          try {
+            disposeChat()
+          } catch {
+            /* 已经注销过 */
+          }
+        }
         // 注销菜单，别在 dsh-pet 里留下点不到的僵尸项
         void petFetch(base, `/menu/item?owner=${encodeURIComponent(MENU_OWNER)}`, { method: 'DELETE' })
       }
     },
-    'dsh-pet-voice: menu + recorder',
+    'dsh-pet-voice: menu + recorder + chat control',
   )
 }

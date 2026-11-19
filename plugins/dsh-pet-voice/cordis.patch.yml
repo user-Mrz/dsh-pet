@@ -21,6 +21,11 @@
 #   Windows 的 waveIn 老接口协商会"成功"但一个采样都录不到。必须走 WASAPI 拿原生格式
 #   再自己重采样，而 Node 没有现成的 Windows 音频库。Python 用 ctypes 调 COM 即可，零第三方依赖。
 #
+# 除语音外，本插件还借 dsh-pet 的 petApi7340.memory.register 挂了一个记忆后端，
+# 把「对话控制」接进 dsh-pet 自带的聊天：对话前（recall）往 system 里追加控制指令，
+# 对话落盘后（capture）解析 [控制:sleep] / [控制:move-right] 这类标记并调对应端点执行。
+# dsh-pet 自带的 [动作:名称] 只能播动画，睡觉 / 走动 / 抛掷走的是另外的端点，插不进去。
+#
 # Python 解释器路径可在环境变量 DSH_PET_VOICE_PYTHON 里覆盖；不设则自动探测。
 
 - insert:

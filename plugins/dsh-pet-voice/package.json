@@ -1,6 +1,6 @@
 {
   "name": "dsh-pet-voice",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "type": "module",
   "description": "在 dsh-pet 桌宠的右键菜单里加一项「语音控制」：点一下说句话，桌宠就跳舞、睡觉、走过去或吃白食。录音在宿主侧完成，识别走 DeepSeek 官方 ASR。",
@@ -13,6 +13,7 @@
   },
   "files": [
     "index.js",
+    "chat-control.js",
     "python",
     "cordis.patch.yml",
     "locale",
