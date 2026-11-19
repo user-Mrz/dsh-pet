@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Voice-controlled pet",
-    "description": "Hold the microphone button beside the composer and say one sentence; the dsh-pet companion does it. Say \"dance\" and it dances, \"go to sleep\" and it sleeps, \"go left\" and it walks over, \"throw it\" and it gets flung. Speech is transcribed by DeepSeek's official ASR and parsed into pet actions; recognition reuses the DeepSeek ASR channel built into dsh-pet, authenticating with the DEEPSEEK_API_KEY in DSH credentials. This plugin stores and forwards no keys. dsh-pet must be installed and enabled first.",
+    "description": "Adds a \"Voice control\" item to the dsh-pet companion's right-click menu. Click it, the pet says \"I'm listening...\" and starts recording; when you finish, your sentence becomes an action: say \"dance\" and it dances, \"go to sleep\" and it sleeps, \"go left\" and it walks over, \"throw it\" and it gets flung. Recording happens on the Host with WASAPI (this machine's microphone is 4-channel / 48 kHz / 32-bit float, which the legacy waveIn interface cannot capture, so a Python helper drives WASAPI and resamples to 16 kHz mono WAV), and recognition uses DeepSeek's official ASR with the DEEPSEEK_API_KEY from DSH credentials. This plugin stores and forwards no keys. Requires dsh-pet installed and enabled, plus Python 3 on the machine.",
     "detail": "docs/DETAIL.md"
   }
 }

@@ -102,12 +102,16 @@ curl -X POST http://127.0.0.1:<dsh端口>/dsh-pet-7340/voice/hear \
 [`plugins/dsh-pet-voice/`](../../plugins/dsh-pet-voice/) 补上这一层：
 
 ```
-按住话筒说话
-  → 采集 16kHz / 单声道 / PCM16 WAV
+右键桌宠 →「语音控制」
+  → 宿主侧 WASAPI 录音（4ch/48k/float32 → 16kHz 单声道 PCM16 WAV）
   → POST /dsh-pet-7340/voice/hear（provider=deepseek）
   → 解析成指令
-  → POST /anim、/sleep、/wake、/position、/throw、/broadcast 驱动桌宠
+  → POST /anim、/sleep、/wake、/position、/throw 驱动桌宠
 ```
+
+**录音在宿主侧，不在浏览器。** 宠物活在 dsh-pet 的桌面 Electron 窗口里，那个窗口加载的是
+dsh-pet 自己的页面，配套插件的代码不在里面；而浏览器录音要求页面处于焦点、需要用户手势、
+还要麦克风权限——右键点的是桌面窗口，不是网页。宿主侧录音绕开全部这些问题。
 
 安装与用法见该目录的 [`README.md`](../../plugins/dsh-pet-voice/README.md)。
 
@@ -115,25 +119,31 @@ curl -X POST http://127.0.0.1:<dsh端口>/dsh-pet-7340/voice/hear \
 
 ## ③ 实测记录
 
-在本机（Windows，dsh-pet 0.4.9，desktop profile）实测通过：
+在本机（Windows，dsh-pet 0.4.9，desktop profile，Python 3.13）实测通过：
 
 | 项目 | 结果 |
 | --- | --- |
 | `POST /v1/tools/asr` 直连（带 `DEEPSEEK_API_KEY`） | `200`，密钥有效 |
 | `/voice/hear` + `provider=deepseek` | `200 {"ok":true}` |
 | `/voice/hear` + `provider=dsh` | `200 {"ok":false,"reason":"unsupported"}`（改动前的问题） |
-| 插件产出的 16kHz 单声道 PCM16 WAV | 被 ASR 接受（`200`） |
-| MP3 输入 | `400 Unsupported audio format`（符合官方限制） |
-| `/anim` `/sleep` `/wake` `/position` `/throw` `/broadcast` | 全部 `200 ok:true` |
-| 指令解析（26 条用例） | 全部命中预期动作 |
+| `/menu/item` 注册 + `/state` 可见 | `200 {"ok":true}`，菜单里出现「语音控制」 |
+| `/menu/click` → `/menu/events` | 点击投递成功，轮询取到 `{"语音控制":"main"}` |
+| Python WASAPI 录音 | 8 秒采到 384000 帧（4ch/48k），重采样为 16k 单声道 |
+| 录音 WAV → ASR | `200`，返回真实转写文本 |
+| 端到端：点菜单 → 录音 → 识别 → 桌宠反应 | **通过**，桌宠先弹「我在听…」，识别后按结果弹气泡 |
+| 指令解析（18 条用例） | 全部命中预期动作 |
 
-**未验证**：真实人声的完整闭环。测试机上 Windows SAPI 合成语音会挂起（`Speak` 不返回），
-无法生成中文语音样本，所以「识别文字 → 驱动宠物」这段是用模拟文字验证的，
-录音与识别两段各自单独验证过。建议安装后按住话筒说一句「跳个舞」自行确认。
-
-### 排查过程中值得记下的两个坑
+### 排查过程中值得记下的几个坑
 
 1. **`pets` 不在顶层**——它在每个条目（`main`、文件宠物）各自的配置里。
    按 `cfg.pets` 读会拿到 `undefined`。
 2. **`PUT /config` 是整包白名单重建**——不是 PATCH。提交不完整或某个字段形态非法
    （例如裸音色名）会导致整包 `400`，报错信息只提 `pets`，不指出真正出错的字段。
+3. **`waveIn` 录不到这台机器的麦克风**——设备能打开、`waveInStart` 返回成功，但
+   `dwBytesRecorded = 0`、`waveInGetPosition = 0`。原因是麦克风原生格式是
+   **4 声道 / 48000 Hz / 32 位浮点**（`WAVE_FORMAT_EXTENSIBLE`），`waveIn` 只吃整数 PCM，
+   格式协商"成功"却出不了数据。必须走 WASAPI 的 `IAudioClient::GetMixFormat` 拿原生格式。
+4. **`fetch` 的 GET 不能带 body**——`Request with GET/HEAD method cannot have body` 会直接抛。
+   统一封装的请求函数必须按方法区分，否则 GET 长轮询永远失败、菜单点击收不到。
+5. **Cordis 的 `ctx` 不能随意赋值**——`ctx.disposed = true` 会报
+   `cannot set property "disposed" without provide`，生命周期标记要用闭包变量。
